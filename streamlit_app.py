@@ -1,0 +1,267 @@
+import pandas as pd
+import streamlit as st
+import matplotlib.pyplot as plt
+
+from pyplants.core.base import BaseDisease
+from pyplants.core.context import UpdateCtx
+from pyplants.phenology.iphen import Iphen
+from pyplants.utils.plants import PlantEnum
+from pyplants.utils.helpers import DailyUpdater
+from pyplants.diseases.grape.pm import Gadoury, Moyer, DavisRI, Caffi
+from pyplants.diseases.grape.gm import Broome, GoFe, GoDom
+from pyplants.diseases.grape.dm import Plasmo
+
+
+DISEASES = [
+    "Powdery Mildew",
+    "Grey Mould",
+    "Downy Mildew"
+]
+
+CULTIVAR = [
+    "CABERNET",
+    "ALBANA",
+    "BARBERA",
+    "BELLONE",
+    "BERVEDINO",
+    "BIANCHETTA",
+    "BOMBINO",
+    "BONAMICO",
+    "BRACHETTO",
+    "CAGNULARI",
+    "CATANESE",
+    "CATARRATTO",
+    "CHARDONNAY",
+    "CILIEGIOLO",
+    "CORTESE",
+    "CORVINA",
+    "DOLCETTO",
+    "DURELLA",
+    "EMPIBOTTE",
+    "ERBALUCE",
+    "FIANO",
+    "FREISA",
+    "GAGLIOPPO",
+    "GARGANEGA",
+    "GRECHETTO",
+    "GRIGNOLINO",
+    "GRILLO",
+    "LAGREIN",
+    "LAMBRUSCO",
+    "MALBEC",
+    "MALVASIA",
+    "MAMMOLO",
+    "MARZEMINO",
+    "MERLOT",
+    "MOLINARA",
+    "MONTEPULCIANO",
+    "MOSCATO",
+    "MULLER",
+    "NASCO",
+    "NEBBIOLO",
+    "NEGRARA",
+    "OTTAVIANELLO",
+    "PAVANA",
+    "PICCOLA",
+    "PIGNOLA",
+    "PINELLA",
+    "PINOT",
+    "RABOSO",
+    "RIESLING",
+    "ROSSARA",
+    "SANGIOVESE",
+    "SCHIAVA",
+    "SCIASCINOSO",
+    "SOMARELLO",
+    "SUSUMANIELLO",
+    "TEROLDEGO",
+    "TINTORA",
+    "TOCAI",
+    "TRAMINER",
+    "TREBBIANO",
+    "TSCHAGGELE",
+    "VERDELLO",
+    "VERDUZZO",
+    "VERMENTINO",
+    "VESPOLINA"
+]
+
+HOME_PLACEHOLDER = """
+## Welcome in PyPlants UI
+
+This is a simple tool to execute models included in `pyplants`. Please use the controls in the sidebar to load your data.
+
+You have to upload a csv file with the following headers. The dataset must be hourly sampled.
+
+| COLUMN | DESCRIPTION | UNIT / FORMAT |
+|---|---|---|
+| DATE | Datetime |YYYY-mm-dd HH:MM:SS |
+| TEMPERATURE | Air temperature | °C |
+| RH | Air relative humidity | % |
+| LEAF_TOP | Leaf wetness (Top side) | % |
+| RAIN | Rainfalls |  mm |
+"""
+
+@st.cache_data
+def load_data(uploaded_file, lw_threshold):
+    """Load the dataset.
+
+    :param uploaded_file: the csv file to use
+    :param lw_threshold: the leaf wetness threshold to use
+    :returns: the dataset in a pandas DataFrame
+    """
+    print("Loading data...")
+    df = pd.read_csv(uploaded_file, parse_dates=["DATE"])
+    # Create the LEAF column using the threshold
+    df["LEAF"] = (df["LEAF_TOP"] > lw_threshold).astype(int)
+    # Set timezone and index of the dataframe
+    df.set_index("DATE", inplace=True)
+    return df
+
+
+@st.cache_data
+def run_models(df, cultiv: str, disease: str):
+    """Run the pyplants models.
+
+    :param df: the agrometeorological dataframe
+    :param cultiv: the cultiv selected
+    :param disease: the disease selected
+    """
+    print("Running models...")
+    models = []
+    iphen = Iphen.build_from_plant(PlantEnum.GRAPE, cultiv.upper())
+    # Select the models based on disease
+    if disease == "Powdery Mildew":
+        models.append(Gadoury(iphen))
+        models.append(Moyer())
+        models.append(DavisRI(iphen))
+        models.append(Caffi(iphen))
+    elif disease == "Downy Mildew":
+        models.append(Plasmo(iphen))
+    elif disease == "Grey Mould":
+        models.append(Broome(iphen))
+        models.append(GoFe(iphen))
+        models.append(GoDom(iphen))
+    else:
+        raise ValueError("Unknown disease provided!")
+    # Check daily model and register them in DailyUpdater
+    daily_models = []
+    hourly_models = []
+    for model in models:
+        if model.get_metadata()["timestep"] == "d":
+            daily_models.append(model)
+        else:
+            hourly_models.append(model)
+    daily_updater = DailyUpdater(daily_models)
+    # Update all target models
+    for row in df.itertuples():
+        dt = row.Index.to_pydatetime()
+        uctx = UpdateCtx(
+            dt=dt,
+            tmean=row.TEMPERATURE,
+            tmax=row.TEMPERATURE,
+            rhmean=row.RH,
+            lw=row.LEAF,
+            rain=row.RAIN)
+        # Models update with new sample
+        iphen.update(uctx)
+        # Update hourly models
+        for model in hourly_models:
+            model.update(uctx)
+        # Update daily models
+        daily_updater.update(uctx)
+    return iphen, models
+
+
+def render_phenology(iphen: Iphen):
+    """Render the phenology results.
+
+    :param iphen: the used phenology model
+    """
+    v = [{"v": r.stage.code, "dt": r.dt} for r in iphen.scale.vscale]
+    r = [{"r": r.stage.code, "dt": r.dt} for r in iphen.scale.rscale]
+    v = pd.DataFrame(v)
+    r = pd.DataFrame(r)
+    st.subheader("Phenology", divider=True)
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(v["dt"], v["v"], label='Vegetative Scale', color='limegreen')
+    ax.plot(r["dt"], r["r"], label='Reproductive Scale', color='darkorange')
+    ax.set_xlabel('Date')
+    ax.set_ylabel('BBCH Stage')
+    ax.set_yticks([0, 19, 39, 59, 79, 99])
+    ax.legend(loc="lower right", fancybox=False)
+    ax.grid(True, linestyle='--', color="#ddd")
+    st.pyplot(fig)
+
+
+def render_diseases(models: list[BaseDisease]):
+    """Render the Powdery Mildew results."""
+    for model in models:
+        event_rows = []
+        for event in model.events:
+            event_rows.append(event.to_dict())
+        model_name = type(model).__name__
+        st.subheader(model_name, divider=True)
+        st.dataframe(pd.DataFrame(event_rows))
+
+
+def validate_form(uploaded_file, cultiv, disease):
+    has_error = False
+    if uploaded_file is None:
+        has_error = True
+        st.error("Please provide a csv file.", icon=":material/error:")
+    if cultiv is None:
+        has_error = True
+        st.error("Please provide a cultivar.", icon=":material/error:")
+    if disease is None:
+        has_error = True
+        st.error("Please provide a disease.", icon=":material/error:")
+    return not has_error
+
+
+st.set_page_config(page_title="PyPlants UI")
+
+with st.sidebar.form(key="options", border=False):
+    st.title("PyPlants UI")
+    st.subheader(":material/settings: Settings", divider=True)
+    # File to analyze
+    uploaded_file = st.file_uploader("Choose a file")
+    # Leaf wetness threshold used to create LWD
+    lw_threshold = st.number_input(
+        "LEAF WETNESS THRESHOLD",
+        min_value=0,
+        max_value=100,
+        value=40,
+        step=1,
+        help="Leaf wetness threshold to consider as wet a leaf")
+    # Cultivar the measures belong
+    cultiv = st.selectbox(
+        "C.V.",
+        index=None,
+        options=CULTIVAR,
+        help="Target cultivar")
+    # Which disease we want to run the models
+    disease = st.selectbox(
+        "Disease",
+        index=None,
+        options=DISEASES,
+        help="Target disease to analyze")
+    # Submit button...
+    ex_submitted = st.form_submit_button(
+        ":material/play_circle: Run Models",
+        type="primary")
+
+placeholder = st.empty()
+placeholder.markdown(HOME_PLACEHOLDER)
+
+if ex_submitted:
+   if validate_form(uploaded_file, cultiv, disease):
+        placeholder.empty()
+        # Form is correctly submitted
+        df = load_data(uploaded_file, lw_threshold)
+        # Execute plant models
+        phen, models = run_models(df, cultiv, disease)
+        # Plot phenology BBCH
+        render_phenology(phen)
+        # Plot disease results
+        render_diseases(models)

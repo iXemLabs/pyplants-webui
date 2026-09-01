@@ -1,0 +1,17 @@
+# PyPlants WebUI
+
+A simple dashboard for PyPlants powered by Streamlit. This app allows users to easily run plant disease models and inspect results.
+
+## Installation
+
+To locally run this application you have to install it first.
+
+```console
+python -m pip install -r requirements.txt
+```
+
+You can locally lunch the application in this way:
+
+```console
+python -m streamlit run streamlit_app.py
+```
