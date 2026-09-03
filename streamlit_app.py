@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 
+from streamlit.logger import get_logger
 from pyplants.core.base import BaseDisease
 from pyplants.core.context import UpdateCtx
 from pyplants.phenology.iphen import Iphen
@@ -11,13 +12,14 @@ from pyplants.diseases.grape.pm import Gadoury, Moyer, DavisRI, Caffi
 from pyplants.diseases.grape.gm import Broome, GoFe, GoDom
 from pyplants.diseases.grape.dm import Plasmo
 
-
+# Supported grape diseases
 DISEASES = [
     "Powdery Mildew",
     "Grey Mould",
     "Downy Mildew"
 ]
 
+# Cultivar supported for Phenology
 CULTIVAR = [
     "CABERNET",
     "ALBANA",
@@ -110,13 +112,27 @@ def load_data(uploaded_file, lw_threshold):
     :param lw_threshold: the leaf wetness threshold to use
     :returns: the dataset in a pandas DataFrame
     """
-    print("Loading data...")
-    df = pd.read_csv(uploaded_file, parse_dates=["DATE"])
-    # Create the LEAF column using the threshold
-    df["LEAF"] = (df["LEAF_TOP"] > lw_threshold).astype(int)
-    # Set timezone and index of the dataframe
-    df.set_index("DATE", inplace=True)
-    return df
+    logger = get_logger(__name__)
+    logger.info("Reading user provided data")
+    # The expected columns inside the dataset
+    expected_columns = ["DATE", "TEMPERATURE", "RH", "LEAF_TOP", "RAIN"]
+    try:
+        df = pd.read_csv(uploaded_file, parse_dates=["DATE"])
+    except ValueError:
+        df = None
+        logger.warning("Unable to create dataframe")
+    else:
+        # Check columns name inside the dataframe
+        if not all(item in df.columns for item in expected_columns):
+            df = None
+            logger.warning("Missing columns in provided dataset")
+        else:
+            # Create the LEAF column using the threshold
+            df["LEAF"] = (df["LEAF_TOP"] > lw_threshold).astype(int)
+            # Set timezone and index of the dataframe
+            df.set_index("DATE", inplace=True)
+    finally:
+        return df
 
 
 @st.cache_data
@@ -127,7 +143,8 @@ def run_models(df, cultiv: str, disease: str):
     :param cultiv: the cultiv selected
     :param disease: the disease selected
     """
-    print("Running models...")
+    logger = get_logger(__name__)
+    logger.info("Running pyplants models!")
     models = []
     iphen = Iphen.build_from_plant(PlantEnum.GRAPE, cultiv.upper())
     # Select the models based on disease
@@ -200,7 +217,9 @@ def render_diseases(models: list[BaseDisease]):
         event_rows = []
         for event in model.events:
             event_rows.append(event.to_dict())
-        model_name = type(model).__name__
+        # Use docstring to print sub headers
+        model_name = model.__doc__.split("\n")[0]
+        model_name = model_name.replace(".", "")
         st.subheader(model_name, divider=True)
         st.dataframe(pd.DataFrame(event_rows))
 
@@ -257,8 +276,13 @@ placeholder.markdown(HOME_PLACEHOLDER)
 if ex_submitted:
    if validate_form(uploaded_file, cultiv, disease):
         placeholder.empty()
-        # Form is correctly submitted
+        # Form is correctly submitted load dataframe
         df = load_data(uploaded_file, lw_threshold)
+        if df is None:
+            st.error(
+                "The provided file is malformed. Please check your input.",
+                icon=":material/error:")
+            st.stop()
         # Execute plant models
         phen, models = run_models(df, cultiv, disease)
         # Plot phenology BBCH
