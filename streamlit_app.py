@@ -1,6 +1,9 @@
+import calendar
 import pandas as pd
+import seaborn as sns
 import streamlit as st
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 from streamlit.logger import get_logger
 from pyplants.core.base import BaseDisease
@@ -13,11 +16,11 @@ from pyplants.diseases.grape.gm import Broome, GoFe, GoDom
 from pyplants.diseases.grape.dm import Plasmo
 
 # Supported grape diseases
-DISEASES = [
-    "Powdery Mildew",
-    "Grey Mould",
-    "Downy Mildew"
-]
+DISEASES = {
+    "Powdery Mildew": "spore_release",
+    "Grey Mould": "infection",
+    "Downy Mildew": "infection"
+}
 
 # Cultivar supported for Phenology
 CULTIVAR = [
@@ -91,17 +94,19 @@ CULTIVAR = [
 HOME_PLACEHOLDER = """
 ## Welcome in PyPlants UI
 
-This is a simple tool to execute models included in `pyplants`. Please use the controls in the sidebar to load your data.
+This is a simple tool to execute models for grapevine included in `pyplants`. Please use the controls in the sidebar to load your data.
 
-You have to upload a csv file with the following headers. The dataset must be hourly sampled.
+The csv file you upload must includes the following headers.
 
 | COLUMN | DESCRIPTION | UNIT / FORMAT |
 |---|---|---|
 | DATE | Datetime |YYYY-mm-dd HH:MM:SS |
-| TEMPERATURE | Air temperature | °C |
-| RH | Air relative humidity | % |
-| LEAF_TOP | Leaf wetness (Top side) | % |
-| RAIN | Rainfalls |  mm |
+| TEMPERATURE | Air Temperature | °C |
+| RH | Relative Humidity | % |
+| LEAF_TOP | Leaf Wetness (Top side) | % |
+| RAIN | Rainfalls | mm |
+
+Please note that data must be hourly sampled and with no missing values.
 """
 
 @st.cache_data
@@ -120,7 +125,7 @@ def load_data(uploaded_file, lw_threshold):
         df = pd.read_csv(uploaded_file, parse_dates=["DATE"])
     except ValueError:
         df = None
-        logger.warning("Unable to create dataframe")
+        logger.warning("Unable to create the dataframe")
     else:
         # Check columns name inside the dataframe
         if not all(item in df.columns for item in expected_columns):
@@ -131,8 +136,9 @@ def load_data(uploaded_file, lw_threshold):
             df["LEAF"] = (df["LEAF_TOP"] > lw_threshold).astype(int)
             # Set timezone and index of the dataframe
             df.set_index("DATE", inplace=True)
-    finally:
-        return df
+            # Localize with proper timezone
+            df.index = df.index.tz_localize("UTC").tz_convert("Europe/Rome")
+    return df
 
 
 @st.cache_data
@@ -211,8 +217,90 @@ def render_phenology(iphen: Iphen):
     st.pyplot(fig)
 
 
-def render_diseases(models: list[BaseDisease]):
-    """Render the Powdery Mildew results."""
+def render_heatmap(df_input: pd.DataFrame, step: str, value: str):
+    """Render a heatmap for the given value using a tabular calendar style.
+
+    :param df_input: output of a disease model as pandas DataFrame
+    :param step: the step of output (`h` or `d`)
+    :param value: the column to use as value
+    """
+    df_input.set_index("dt", inplace=True)
+    # Since plot is daily, we resample smaller timestep
+    if step == "h":
+        df_input = df_input.resample("D").max()
+    # Remove timezone info to simplify computing
+    df_input.index = df_input.index.tz_localize(None)
+    # Determine target year
+    year = df_input.index[0].year
+    # Generate complete date range for the entire year (Jan 1 to Dec 31)
+    full_year = pd.date_range(
+        start=f'{year}-01-01',
+        end=f'{year}-12-31',
+        freq='D'
+    )
+    df_full = pd.DataFrame({'dt': full_year})
+    # Merge input onto full year frame; missing dates take NaN values
+    df = df_full.join(df_input, on="dt")
+    # Extract Day of Week (0 = Monday, 6 = Sunday)
+    df['day_of_week'] = df['dt'].dt.dayofweek
+    # Compute week column index relative to the first week of the year
+    df["week"] = df["dt"].dt.isocalendar().week - 1
+    # Pivot to 7 x W matrix (Monday=0 to Sunday=6)
+    pivot = df.pivot(
+        index='day_of_week',
+        columns='week',
+        values=value
+    ).reindex(range(7))
+    # Build custom green (0.0) to red (1.0) color map
+    cmap = mcolors.LinearSegmentedColormap.from_list(
+        'GreenToRed', ['#2ca02c', '#ff7f0e', '#d62728']
+    )
+    fig, ax = plt.subplots(figsize=(15, 3))
+    # Set background to gray for unprovided data points
+    ax.set_facecolor('#ccc')
+    # Render heatmap with small white gaps between daily squares
+    sns.heatmap(
+        pivot,
+        cmap=cmap,
+        vmin=0,
+        vmax=1,
+        square=True,
+        linewidths=1.2,
+        linecolor='white',
+        cbar_kws={
+            'label': 'Risk',
+            'orientation': 'horizontal',
+            'pad': 0.25,
+        },
+        ax=ax,
+    )
+    # Y-axis formatting: Monday to Sunday
+    days = list(calendar.day_abbr)
+    ax.set_yticks([i + 0.5 for i in range(7)])
+    ax.set_yticklabels(days, rotation=0)
+    # X-axis formatting: Month locators positioned at the start of each month
+    month_starts = pd.date_range(
+        start=f'{year}-01-01',
+        end=f'{year}-12-01',
+        freq='MS'
+    )
+    month_ticks = [m.isocalendar().week - 1 for m in month_starts]
+    month_names = [m.strftime('%b') for m in month_starts]
+    ax.set_xticks([w + 0.5 for w in month_ticks])
+    ax.set_xticklabels(month_names, rotation=0)
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    ax.set_title(value.replace("_", " ").capitalize(), pad=12)
+    plt.tight_layout()
+    st.pyplot(fig)
+
+
+def render_diseases(models: list[BaseDisease], disease: str):
+    """Render an output table for each model.
+
+    :param models: list of models executed
+    :param disease: the disease name selected
+    """
     for model in models:
         event_rows = []
         for event in model.events:
@@ -221,10 +309,22 @@ def render_diseases(models: list[BaseDisease]):
         model_name = model.__doc__.split("\n")[0]
         model_name = model_name.replace(".", "")
         st.subheader(model_name, divider=True)
-        st.dataframe(pd.DataFrame(event_rows))
+        # Prepare dataframe
+        df = pd.DataFrame(event_rows)
+        step = model.get_metadata()["timestep"]
+        # Plot the tabular output
+        st.dataframe(df)
+        render_heatmap(df, step, DISEASES[disease])
 
 
 def validate_form(uploaded_file, cultiv, disease):
+    """Validate form upon submission.
+
+    :param uploaded_file: the file uploaded by the user
+    :param cultiv: the selected cultivar
+    :param disease: the selected disease
+    :returns: a boolean indicating if the form submission is valid or not
+    """
     has_error = False
     if uploaded_file is None:
         has_error = True
@@ -237,9 +337,10 @@ def validate_form(uploaded_file, cultiv, disease):
         st.error("Please provide a disease.", icon=":material/error:")
     return not has_error
 
-
+# Generic application configuration
 st.set_page_config(page_title="PyPlants UI")
 
+# Layout definition
 with st.sidebar.form(key="options", border=False):
     st.title("PyPlants UI")
     st.subheader(":material/settings: Settings", divider=True)
@@ -263,7 +364,7 @@ with st.sidebar.form(key="options", border=False):
     disease = st.selectbox(
         "Disease",
         index=None,
-        options=DISEASES,
+        options=list(DISEASES.keys()),
         help="Target disease to analyze")
     # Submit button...
     ex_submitted = st.form_submit_button(
@@ -276,16 +377,17 @@ placeholder.markdown(HOME_PLACEHOLDER)
 if ex_submitted:
    if validate_form(uploaded_file, cultiv, disease):
         placeholder.empty()
-        # Form is correctly submitted load dataframe
-        df = load_data(uploaded_file, lw_threshold)
-        if df is None:
-            st.error(
-                "The provided file is malformed. Please check your input.",
-                icon=":material/error:")
-            st.stop()
-        # Execute plant models
-        phen, models = run_models(df, cultiv, disease)
+        with st.spinner("Now Loading..."):
+            # Form is correctly submitted load dataframe
+            df = load_data(uploaded_file, lw_threshold)
+            if df is None:
+                st.error(
+                    "Provided file is malformed. Please check your input.",
+                    icon=":material/error:")
+                st.stop()
+            # Execute plant models
+            phen, models = run_models(df, cultiv, disease)
         # Plot phenology BBCH
         render_phenology(phen)
         # Plot disease results
-        render_diseases(models)
+        render_diseases(models, disease)

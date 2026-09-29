@@ -14,3 +14,7 @@ level = "info"
 #
 # Default: "%(asctime)s %(message)s"
 messageFormat = "%(asctime)s %(message)s"
+
+[theme]
+
+base = "light"
