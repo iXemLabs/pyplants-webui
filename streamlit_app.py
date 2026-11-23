@@ -17,81 +17,10 @@ from pyplants.diseases.grape.pm import Gadoury, Moyer, DavisRI, Caffi
 from pyplants.diseases.grape.gm import Broome, GoFe, GoDom
 from pyplants.diseases.grape.dm import Plasmo
 
-# Supported grape diseases
-DISEASES = {
-    "Powdery Mildew": "spore_release",
-    "Grey Mould": "infection",
-    "Downy Mildew": "infection"
-}
+from agrivars import DISEASES, CULTIVAR
 
-# Cultivar supported for Phenology
-CULTIVAR = [
-    "CABERNET",
-    "ALBANA",
-    "BARBERA",
-    "BELLONE",
-    "BERVEDINO",
-    "BIANCHETTA",
-    "BOMBINO",
-    "BONAMICO",
-    "BRACHETTO",
-    "CAGNULARI",
-    "CATANESE",
-    "CATARRATTO",
-    "CHARDONNAY",
-    "CILIEGIOLO",
-    "CORTESE",
-    "CORVINA",
-    "DOLCETTO",
-    "DURELLA",
-    "EMPIBOTTE",
-    "ERBALUCE",
-    "FIANO",
-    "FREISA",
-    "GAGLIOPPO",
-    "GARGANEGA",
-    "GRECHETTO",
-    "GRIGNOLINO",
-    "GRILLO",
-    "LAGREIN",
-    "LAMBRUSCO",
-    "MALBEC",
-    "MALVASIA",
-    "MAMMOLO",
-    "MARZEMINO",
-    "MERLOT",
-    "MOLINARA",
-    "MONTEPULCIANO",
-    "MOSCATO",
-    "MULLER",
-    "NASCO",
-    "NEBBIOLO",
-    "NEGRARA",
-    "OTTAVIANELLO",
-    "PAVANA",
-    "PICCOLA",
-    "PIGNOLA",
-    "PINELLA",
-    "PINOT",
-    "RABOSO",
-    "RIESLING",
-    "ROSSARA",
-    "SANGIOVESE",
-    "SCHIAVA",
-    "SCIASCINOSO",
-    "SOMARELLO",
-    "SUSUMANIELLO",
-    "TEROLDEGO",
-    "TINTORA",
-    "TOCAI",
-    "TRAMINER",
-    "TREBBIANO",
-    "TSCHAGGELE",
-    "VERDELLO",
-    "VERDUZZO",
-    "VERMENTINO",
-    "VESPOLINA"
-]
+
+__version__ = "0.1.0"
 
 HOME_PLACEHOLDER = """
 ## Welcome in PyPlants
@@ -370,6 +299,7 @@ with st.sidebar.form(key="options", border=False):
     ex_submitted = st.form_submit_button(
         ":material/play_circle: Run Models",
         type="primary")
+    st.caption("v%s" % __version__)
 
 placeholder = st.empty()
 placeholder.markdown(HOME_PLACEHOLDER)
