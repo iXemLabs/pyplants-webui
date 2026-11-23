@@ -5,12 +5,14 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
+from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError
 from streamlit.logger import get_logger
 from pyplants.core.base import BaseDisease
 from pyplants.core.context import UpdateCtx
 from pyplants.phenology.iphen import Iphen
 from pyplants.utils.plants import PlantEnum
-from pyplants.utils.helpers import DailyUpdater
+from pyplants.utils.helpers import BulkUpdater
 from pyplants.diseases.grape.pm import Gadoury, Moyer, DavisRI, Caffi
 from pyplants.diseases.grape.gm import Broome, GoFe, GoDom
 from pyplants.diseases.grape.dm import Plasmo
@@ -92,7 +94,7 @@ CULTIVAR = [
 ]
 
 HOME_PLACEHOLDER = """
-## Welcome in PyPlants UI
+## Welcome in PyPlants
 
 This is a simple tool to execute models for grapevine included in `pyplants`. Please use the controls in the sidebar to load your data.
 
@@ -106,7 +108,7 @@ The csv file you upload must includes the following headers.
 | LEAF_TOP | Leaf Wetness (Top side) | % |
 | RAIN | Rainfalls | mm |
 
-Please note that data must be hourly sampled and with no missing values.
+Please note that data must be hourly sampled and with **no missing values**.
 """
 
 @st.cache_data
@@ -167,15 +169,7 @@ def run_models(df, cultiv: str, disease: str):
         models.append(GoDom(iphen))
     else:
         raise ValueError("Unknown disease provided!")
-    # Check daily model and register them in DailyUpdater
-    daily_models = []
-    hourly_models = []
-    for model in models:
-        if model.get_metadata()["timestep"] == "d":
-            daily_models.append(model)
-        else:
-            hourly_models.append(model)
-    daily_updater = DailyUpdater(daily_models)
+    bulk = BulkUpdater(models)
     # Update all target models
     for row in df.itertuples():
         dt = row.Index.to_pydatetime()
@@ -188,11 +182,8 @@ def run_models(df, cultiv: str, disease: str):
             rain=row.RAIN)
         # Models update with new sample
         iphen.update(uctx)
-        # Update hourly models
-        for model in hourly_models:
-            model.update(uctx)
-        # Update daily models
-        daily_updater.update(uctx)
+        bulk.update(uctx)
+    bulk.finalize()
     return iphen, models
 
 
@@ -206,6 +197,10 @@ def render_phenology(iphen: Iphen):
     v = pd.DataFrame(v)
     r = pd.DataFrame(r)
     st.subheader("Phenology", divider=True)
+    # Build the single dataframe to access raw output
+    df_raw = pd.merge(v, r, how="outer", on="dt")
+    st.dataframe(df_raw, column_order=("dt", "v", "r"))
+    # Render the line chart
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.plot(v["dt"], v["v"], label='Vegetative Scale', color='limegreen')
     ax.plot(r["dt"], r["r"], label='Reproductive Scale', color='darkorange')
@@ -215,7 +210,6 @@ def render_phenology(iphen: Iphen):
     ax.legend(loc="lower right", fancybox=False)
     ax.grid(True, linestyle='--', color="#ddd")
     st.pyplot(fig)
-
 
 def render_heatmap(df_input: pd.DataFrame, step: str, value: str):
     """Render a heatmap for the given value using a tabular calendar style.
@@ -338,11 +332,17 @@ def validate_form(uploaded_file, cultiv, disease):
     return not has_error
 
 # Generic application configuration
-st.set_page_config(page_title="PyPlants UI")
+st.set_page_config(page_title="PyPlants")
+
+try:
+    ppv = version("pyplants")
+except PackageNotFoundError:
+    ppv = "Unknown"
 
 # Layout definition
 with st.sidebar.form(key="options", border=False):
-    st.title("PyPlants UI")
+    st.title("PyPlants Quickstart")
+    st.badge("pyplants@v%s" % ppv, icon=":material/deployed_code:")
     st.subheader(":material/settings: Settings", divider=True)
     # File to analyze
     uploaded_file = st.file_uploader("Choose a file")
@@ -375,8 +375,8 @@ placeholder = st.empty()
 placeholder.markdown(HOME_PLACEHOLDER)
 
 if ex_submitted:
-   if validate_form(uploaded_file, cultiv, disease):
-        placeholder.empty()
+    placeholder.empty()
+    if validate_form(uploaded_file, cultiv, disease):
         with st.spinner("Now Loading..."):
             # Form is correctly submitted load dataframe
             df = load_data(uploaded_file, lw_threshold)
